@@ -1,0 +1,15 @@
+*.jou
+*.log
+*.str
+*.xpr
+/.Xil
+/vivado*
+*.bit
+*.bin
+*.cache
+*.hw
+*.ip_user_files
+*.runs
+*.sim
+*.gen
+*.srcs
