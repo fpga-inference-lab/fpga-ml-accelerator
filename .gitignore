@@ -16,3 +16,4 @@
 xsim.dir/
 *.pb
 *.wdb
+/build/
