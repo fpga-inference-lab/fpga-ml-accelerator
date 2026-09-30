@@ -1,3 +1,6 @@
+// use_dsp: Vivado builds small (8x8) multiplies from LUTs by default; this puts
+// the multiply and the accumulator inside one DSP48 slice instead.
+(* use_dsp = "yes" *)
 module pe(
     input logic clk,
     input logic rst,

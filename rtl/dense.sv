@@ -41,9 +41,11 @@ end
 typedef enum logic [2:0] {IDLE, CLEAR, FEED, WRITE, FINISH} state_t;
 state_t state;
 
-int rt, ct;   // current row tile, column tile
-int t;        // feed cycle within a tile
-int w;        // result being written within a tile
+// Counters are narrow and unsigned (not int) so that / N, % N and * COLS reduce
+// to wiring and small adders in synthesis instead of 32-bit signed arithmetic.
+logic [7:0]  rt, ct;   // current row tile, column tile
+logic [15:0] t;        // feed cycle within a tile
+logic [7:0]  w;        // result being written within a tile
 
 logic signed [7:0]  a_feed [N];
 logic signed [7:0]  b_feed [N];
@@ -58,10 +60,12 @@ systolic_array #(.N(N)) array (
     .c       (c)
 );
 
-// result currently being written back
-int wi, wj, row, col;
+// Write-back is a two-stage pipeline so each stage fits in one 100 MHz cycle:
+//   stage 1 (WRITE state): pick result w from the array, add bias, ReLU -> z_r
+//   stage 2 (one cycle later): requant z_r and store both into y / y_q
+logic [7:0]  wi, wj;
+logic [15:0] row, col;
 logic signed [31:0] bias, z;
-logic signed [31:0] zr;
 
 assign wi  = w / N;
 assign wj  = w % N;
@@ -73,7 +77,26 @@ always_comb begin
     z = c[wi][wj] + bias * 64;
     if (APPLY_ACT && z < 0)
         z = 0;
-    zr = (z + 32) >>> 6;
+end
+
+logic               wr_valid;
+logic [15:0]        wr_addr;
+logic signed [31:0] z_r, zr;
+
+assign zr = (z_r + 32) >>> 6;
+
+always_ff @(posedge clk) begin
+    if (rst)
+        wr_valid <= 0;
+    else begin
+        wr_valid <= (state == WRITE) && row < M && col < COLS;
+        wr_addr  <= row*COLS + col;
+        z_r      <= z;
+        if (wr_valid) begin
+            y[wr_addr]   <= z_r;
+            y_q[wr_addr] <= (zr > 127) ? 8'sd127 : (zr < -128) ? -8'sd128 : zr[7:0];
+        end
+    end
 end
 
 always_ff @(posedge clk) begin
@@ -121,10 +144,6 @@ always_ff @(posedge clk) begin
             end
 
             WRITE: begin
-                if (row < M && col < COLS) begin
-                    y[row*COLS + col]   <= z;
-                    y_q[row*COLS + col] <= (zr > 127) ? 8'sd127 : (zr < -128) ? -8'sd128 : zr[7:0];
-                end
                 w <= w + 1;
                 if (w == N*N - 1) begin
                     if (ct == COL_TILES - 1) begin
@@ -143,7 +162,7 @@ always_ff @(posedge clk) begin
             end
 
             FINISH: begin
-                done  <= 1;
+                done  <= 1;   // the last result is written by stage 2 on this same edge
                 state <= IDLE;
             end
         endcase
