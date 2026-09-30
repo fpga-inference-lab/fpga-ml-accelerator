@@ -1,11 +1,8 @@
-*.jou
-*.log
-*.str
+# Build outputs from scripts/build.tcl (bitstream, reports, CPU benchmark binaries)
+/build/
+
+# Vivado projects and their generated files (projects live outside this repo)
 *.xpr
-/.Xil
-/vivado*
-*.bit
-*.bin
 *.cache
 *.hw
 *.ip_user_files
@@ -13,7 +10,18 @@
 *.sim
 *.gen
 *.srcs
+*.bit
+*.bin
+/.Xil
+/vivado*
+*.jou
+*.log
+*.str
+
+# xsim (command-line simulation run from the repo root)
 xsim.dir/
 *.pb
 *.wdb
-/build/
+
+# Python
+__pycache__/

@@ -2,7 +2,7 @@
 #
 #   vivado -mode batch -source scripts/build.tcl
 #
-# Outputs go to build/ (git-ignored): top.bit plus utilization, timing and DRC reports.
+# Outputs go to build/ (git-ignored): top.bit plus utilization, timing, DRC and power reports.
 # Paths are worked out from this script's location, so it runs from any folder on any machine.
 
 set REPO  [file normalize [file join [file dirname [info script]] ..]]
@@ -28,6 +28,7 @@ route_design
 report_utilization    -file $OUT/utilization.rpt
 report_timing_summary -file $OUT/timing.rpt
 report_drc            -file $OUT/drc.rpt
+report_power          -file $OUT/power.rpt
 write_bitstream -force $OUT/top.bit
 
 puts "Bitstream written to $OUT/top.bit"
