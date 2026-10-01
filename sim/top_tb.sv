@@ -3,11 +3,13 @@
 // Full-system test of top.sv through its UART pins, at the real 115200 baud.
 // The testbench plays the laptop: it sends each of the 5 test examples as a
 // 20-byte request and checks the 14-byte reply against the Python reference.
+// FAST picks the engine (1 = fast_mlp, 0 = systolic mlp); run it once for each.
 // It first sends a half request and goes quiet, to check the timeout drops it.
 // HEX_DIR is relative to where xsim runs (the repo root by default).
 module top_tb;
 
     parameter HEX_DIR = "model/weights/hex/";
+    parameter bit FAST = 1;   // which engine top builds (see top.sv)
 
     localparam int CLKS_PER_BIT = 868;
     localparam int TIMEOUT_CLKS = 50_000;   // shortened so the sim stays quick
@@ -16,7 +18,7 @@ module top_tb;
     logic clk, btnC, RsRx, RsTx;
     logic [15:0] led;
 
-    top #(.CLKS_PER_BIT(CLKS_PER_BIT), .TIMEOUT_CLKS(TIMEOUT_CLKS), .HEX_DIR(HEX_DIR)) dut (
+    top #(.CLKS_PER_BIT(CLKS_PER_BIT), .TIMEOUT_CLKS(TIMEOUT_CLKS), .FAST(FAST), .HEX_DIR(HEX_DIR)) dut (
         .clk(clk), .btnC(btnC), .RsRx(RsRx), .RsTx(RsTx), .led(led)
     );
 
@@ -87,10 +89,10 @@ module top_tb;
 
             $display("example %0d: pred %0d  z2 = %0d %0d  (%0d cycles)", m, resp[1], got0, got1, cycles);
 
-            if (resp[0] !== 8'hA5 || resp[1] !== expected_pred ||
+            if (resp[0] !== (FAST ? 8'hA6 : 8'hA5) || resp[1] !== expected_pred ||
                 got0 !== z2_ref[m*O] || got1 !== z2_ref[m*O + 1]) begin
-                $display("  MISMATCH: expected header a5, pred %0d, z2 = %0d %0d",
-                         expected_pred, z2_ref[m*O], z2_ref[m*O + 1]);
+                $display("  MISMATCH: expected header %h, pred %0d, z2 = %0d %0d",
+                         FAST ? 8'hA6 : 8'hA5, expected_pred, z2_ref[m*O], z2_ref[m*O + 1]);
                 errors++;
             end
             if (led[0] !== expected_pred || led[1] !== 1) begin

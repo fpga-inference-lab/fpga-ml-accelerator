@@ -1,8 +1,8 @@
 """Phase 7 benchmark: FPGA vs CPU latency for one inference of the int8 20-16-2 MLP.
 
 Usage:
-    python host/benchmark.py            # CPU baselines + the FPGA's on-chip cycle count (221)
-    python host/benchmark.py COM5       # also measure the live board over UART
+    python host/benchmark.py            # CPU baselines + both FPGA engines' known cycle counts
+    python host/benchmark.py COM5       # also measure the live board (whichever engine is programmed)
 
 Every CPU version computes the exact same integer math as the hardware and is
 checked against model/weights/z2_reference.txt before it is timed.
@@ -10,7 +10,8 @@ checked against model/weights/z2_reference.txt before it is timed.
 Writes results/benchmark.json, results/benchmark.md and results/latency.png.
 
 What is compared:
-  FPGA       on-chip compute cycles x 10 ns (measured by the FPGA itself, not over USB)
+  FPGA       on-chip compute cycles x 10 ns (counted by the FPGA itself, not over USB), for
+             both engines: "fast" (fully unrolled fast_mlp.sv) and "systolic" (mlp.sv)
   C -O2      the same loops in C, one inference timed at a time with rdtsc
   C -O3      same, with -march=native auto-vectorization
   numpy      float32 matmuls through Intel MKL (BLAS) and int64 matmuls, timed per call from Python
@@ -35,7 +36,12 @@ BUILD = REPO / "build"
 RESULTS = REPO / "results"
 
 FPGA_CLOCK_MHZ = 100
-FPGA_CYCLES = 221            # measured on the board by rtl/top.sv; overwritten if a port is given
+# On-chip cycle counts reported by rtl/top.sv, and where each number came from.
+# A live board measurement (pass a COM port) replaces the entry for the engine programmed.
+FPGA_ENGINES = {
+    "fast":     {"cycles": 7,   "source": "full-system simulation (sim/top_tb.sv)"},
+    "systolic": {"cycles": 221, "source": "measured on the board"},
+}
 MACS = 20 * 16 + 16 * 2      # multiply-accumulates per inference
 
 X = np.loadtxt(WEIGHTS / "X_test.txt", dtype=np.int64, ndmin=2)
@@ -136,21 +142,24 @@ def measure_board(port, iters=200):
     import serial
     from run import BAUD, infer
 
-    cycles, round_trip = set(), []
+    cycles, engines, round_trip = set(), set(), []
     with serial.Serial(port, BAUD, timeout=1) as ser:
         for i in range(iters):
             m = i % len(X)
             t0 = time.perf_counter_ns()
-            pred, z2, c = infer(ser, X[m])
+            pred, z2, c, engine = infer(ser, X[m])
             round_trip.append(time.perf_counter_ns() - t0)
             if list(z2) != Z2_REF[m].tolist():
                 sys.exit(f"board gave {z2} for example {m}, expected {Z2_REF[m].tolist()}")
             cycles.add(c)
-    return sorted(cycles), summarize(np.array(round_trip))
+            engines.add(engine)
+    if len(engines) != 1:
+        sys.exit(f"replies came from more than one engine: {engines}")
+    return engines.pop(), sorted(cycles), summarize(np.array(round_trip))
 
 
-def fpga_power_w():
-    rpt = BUILD / "power.rpt"
+def fpga_power_w(engine):
+    rpt = BUILD / engine / "power.rpt"
     if not rpt.exists():
         return None
     text = rpt.read_text()
@@ -171,17 +180,21 @@ def main():
     port = sys.argv[1] if len(sys.argv) > 1 else None
     results = {"cpu": cpu_name(), "macs_per_inference": MACS, "rows": []}
 
-    fpga_cycles = [FPGA_CYCLES]
+    engines = {name: {"cycles": [e["cycles"]], "source": e["source"]} for name, e in FPGA_ENGINES.items()}
     if port:
         print(f"measuring the board on {port} ...")
-        fpga_cycles, rt = measure_board(port)
+        engine, cycles, rt = measure_board(port)
+        engines[engine] = {"cycles": cycles, "source": "measured on the board (this run)"}
         results["uart_round_trip"] = rt
-        print(f"  on-chip cycles seen: {fpga_cycles}   USB round trip median {rt['p50_ns'] / 1e6:.2f} ms")
-    fpga_ns = [c * 1000 / FPGA_CLOCK_MHZ for c in fpga_cycles]
-    results["rows"].append({
-        "name": f"FPGA (Basys 3, {FPGA_CLOCK_MHZ} MHz)", "kind": "fpga", "cycles": fpga_cycles,
-        **summarize(np.array(fpga_ns)), "note": "on-chip cycle count; identical every run"})
-    results["fpga_power"] = fpga_power_w()
+        print(f"  {engine} engine, on-chip cycles seen: {cycles}   "
+              f"USB round trip median {rt['p50_ns'] / 1e6:.2f} ms")
+    for name, label in [("fast", "fully unrolled"), ("systolic", "systolic array")]:
+        e = engines[name]
+        fpga_ns = [c * 1000 / FPGA_CLOCK_MHZ for c in e["cycles"]]
+        results["rows"].append({
+            "name": f"FPGA {label} ({FPGA_CLOCK_MHZ} MHz)", "kind": "fpga", "engine": name,
+            "cycles": e["cycles"], "source": e["source"], "power": fpga_power_w(name),
+            **summarize(np.array(fpga_ns))})
 
     print("C baselines ...")
     for flags, name, label in [(["-O2"], "O2", "C -O2"),
@@ -223,19 +236,26 @@ def write_markdown(results):
     lines = [
         f"CPU: {results['cpu']}. One inference = {results['macs_per_inference']} multiply-accumulates.",
         "",
-        "| Implementation | median | p99 | p99.9 | worst seen | worst / median |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Implementation | median | p99 | p99.9 | worst seen | worst / median | median vs fast FPGA |",
+        "|---|---:|---:|---:|---:|---:|---:|",
     ]
+    fast = next(r for r in results["rows"] if r.get("engine") == "fast")
     for r in results["rows"]:
+        ratio = r["p50_ns"] / fast["p50_ns"]
+        vs = "—" if r is fast else (f"{ratio:,.0f}x slower" if ratio >= 1 else f"{1 / ratio:,.1f}x faster")
         lines.append(f"| {r['name']} | {fmt_ns(r['p50_ns'])} | {fmt_ns(r['p99_ns'])} | "
-                     f"{fmt_ns(r['p999_ns'])} | {fmt_ns(r['max_ns'])} | {r['max_ns'] / r['p50_ns']:,.1f}x |")
-    p = results.get("fpga_power")
-    if p:
-        fpga = results["rows"][0]
-        uj = p["total_w"] * fpga["p50_ns"] / 1e3
-        lines += ["", f"FPGA on-chip power (Vivado estimate, default activity): {p['total_w']:.3f} W "
-                      f"({p['static_w']:.3f} W static + {p['dynamic_w']:.3f} W dynamic) "
-                      f"-> about {uj:.2f} µJ per inference."]
+                     f"{fmt_ns(r['p999_ns'])} | {fmt_ns(r['max_ns'])} | {r['max_ns'] / r['p50_ns']:,.1f}x | {vs} |")
+    lines.append("")
+    for r in results["rows"]:
+        if r["kind"] != "fpga":
+            continue
+        line = f"{r['name']}: {r['cycles'][0]} cycles, {r['source']}."
+        p = r.get("power")
+        if p:
+            uj = p["total_w"] * r["p50_ns"] / 1e3
+            line += (f" On-chip power (Vivado estimate, default activity): {p['total_w']:.3f} W"
+                     f" -> about {uj * 1000:.1f} nJ per inference.")
+        lines.append(f"- {line}")
     rt = results.get("uart_round_trip")
     if rt:
         lines += ["", f"USB-UART round trip to the board (for context, not the accelerator's latency): "
@@ -297,8 +317,14 @@ def plot(results):
               fontsize=8, labelcolor=ink2)
 
     fig.tight_layout(rect=(0, 0, 1, 0.9))
-    fig.text(0.02, 0.965, "One inference, FPGA vs CPU: the CPU is faster on average, the FPGA never varies",
-             ha="left", va="top", fontsize=11, color=ink, fontweight="bold")
+    best_fpga = min(r["p50_ns"] for r in results["rows"] if r["kind"] == "fpga")
+    best_cpu = min(r["p50_ns"] for r in results["rows"] if r["kind"] == "cpu")
+    if best_fpga <= best_cpu:
+        title = f"One inference: the FPGA beats every CPU version ({best_cpu / best_fpga:.1f}x vs compiled C) and never varies"
+    else:
+        title = (f"One inference: compiled C is {best_fpga / best_cpu:.1f}x faster on the median; "
+                 "the FPGA never varies")
+    fig.text(0.02, 0.965, title, ha="left", va="top", fontsize=11, color=ink, fontweight="bold")
     fig.text(0.02, 0.915, f"int8 20-16-2 MLP, {MACS} MACs. CPU: {results['cpu']}",
              ha="left", va="top", fontsize=8.5, color=ink2)
     fig.savefig(RESULTS / "latency.png", facecolor=surface)

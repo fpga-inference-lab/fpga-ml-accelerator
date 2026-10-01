@@ -3,7 +3,8 @@
 // Protocol (115200 baud, 8N1):
 //   host -> FPGA: 20 bytes, the int8 input vector x[0..19]
 //   FPGA -> host: 14 bytes
-//     [0]      0xA5 (marks the start of a reply)
+//     [0]      marks the start of a reply and names the engine:
+//              0xA5 = systolic array (mlp.sv), 0xA6 = fully unrolled pipeline (fast_mlp.sv)
 //     [1]      prediction (0 = down, 1 = up)
 //     [2..5]   z2[0], int32 little-endian (down score)
 //     [6..9]   z2[1], int32 little-endian (up score)
@@ -16,6 +17,8 @@
 module top #(
     parameter int CLKS_PER_BIT = 868,          // 100 MHz / 115200 baud
     parameter int TIMEOUT_CLKS = 10_000_000,   // 100 ms
+    parameter bit FAST = 1,                    // 1: fast_mlp, 0: systolic-array mlp
+    parameter int TREE_REG_EVERY = 3,          // fast_mlp pipeline depth (see fast_mlp.sv)
     parameter HEX_DIR = "model/weights/hex/"
 )(
     input  logic        clk,
@@ -52,11 +55,21 @@ logic signed [31:0] z2 [O];
 logic               pred [1];
 logic               mlp_start, mlp_done, mlp_done_d;
 
-mlp #(.M(1), .K1(K1), .H(16), .O(O),
-      .W1_FILE({HEX_DIR, "W1.hex"}), .B1_FILE({HEX_DIR, "b1.hex"}),
-      .W2_FILE({HEX_DIR, "W2.hex"}), .B2_FILE({HEX_DIR, "b2.hex"})) net (
-    .clk(clk), .rst(rst), .start(mlp_start), .x(x), .z2(z2), .pred(pred), .done(mlp_done)
-);
+generate
+    if (FAST) begin : engine
+        fast_mlp #(.K1(K1), .H(16), .O(O), .TREE_REG_EVERY(TREE_REG_EVERY),
+                   .W1_FILE({HEX_DIR, "W1.hex"}), .B1_FILE({HEX_DIR, "b1.hex"}),
+                   .W2_FILE({HEX_DIR, "W2.hex"}), .B2_FILE({HEX_DIR, "b2.hex"})) net (
+            .clk(clk), .rst(rst), .start(mlp_start), .x(x), .z2(z2), .pred(pred), .done(mlp_done)
+        );
+    end else begin : engine
+        mlp #(.M(1), .K1(K1), .H(16), .O(O),
+              .W1_FILE({HEX_DIR, "W1.hex"}), .B1_FILE({HEX_DIR, "b1.hex"}),
+              .W2_FILE({HEX_DIR, "W2.hex"}), .B2_FILE({HEX_DIR, "b2.hex"})) net (
+            .clk(clk), .rst(rst), .start(mlp_start), .x(x), .z2(z2), .pred(pred), .done(mlp_done)
+        );
+    end
+endgenerate
 
 typedef enum logic [1:0] {RECV, RUN, SEND} state_t;
 state_t state;
@@ -106,7 +119,7 @@ always_ff @(posedge clk) begin
             RUN: begin
                 cycles <= cycles + 1;
                 if (mlp_done && !mlp_done_d) begin
-                    resp[0] <= 8'hA5;
+                    resp[0] <= FAST ? 8'hA6 : 8'hA5;
                     resp[1] <= {7'b0, pred[0]};
                     for (int b = 0; b < 4; b++) begin
                         resp[2 + b]  <= z2[0][8*b +: 8];

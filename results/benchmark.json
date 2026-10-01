@@ -3,18 +3,44 @@
   "macs_per_inference": 352,
   "rows": [
     {
-      "name": "FPGA (Basys 3, 100 MHz)",
+      "name": "FPGA fully unrolled (100 MHz)",
       "kind": "fpga",
+      "engine": "fast",
+      "cycles": [
+        7
+      ],
+      "source": "measured on the board (this run)",
+      "power": {
+        "total_w": 0.095,
+        "dynamic_w": 0.023,
+        "static_w": 0.072
+      },
+      "min_ns": 70.0,
+      "p50_ns": 70.0,
+      "p90_ns": 70.0,
+      "p99_ns": 70.0,
+      "p999_ns": 70.0,
+      "max_ns": 70.0
+    },
+    {
+      "name": "FPGA systolic array (100 MHz)",
+      "kind": "fpga",
+      "engine": "systolic",
       "cycles": [
         221
       ],
+      "source": "measured on the board",
+      "power": {
+        "total_w": 0.096,
+        "dynamic_w": 0.024,
+        "static_w": 0.072
+      },
       "min_ns": 2210.0,
       "p50_ns": 2210.0,
       "p90_ns": 2210.0,
       "p99_ns": 2210.0,
       "p999_ns": 2210.0,
-      "max_ns": 2210.0,
-      "note": "on-chip cycle count; identical every run"
+      "max_ns": 2210.0
     },
     {
       "name": "C -O2",
@@ -23,20 +49,20 @@
       "min_ns": 39.06,
       "p50_ns": 42.86,
       "p90_ns": 44.49,
-      "p99_ns": 134.01,
-      "p999_ns": 139.43,
-      "max_ns": 44327.53
+      "p99_ns": 66.19,
+      "p999_ns": 167.1,
+      "max_ns": 44347.06
     },
     {
       "name": "C -O3 -march=native",
       "kind": "cpu",
       "iters": 1000000,
-      "min_ns": 38.52,
+      "min_ns": 32.55,
       "p50_ns": 42.32,
       "p90_ns": 43.4,
-      "p99_ns": 44.49,
-      "p999_ns": 45.03,
-      "max_ns": 32833.12
+      "p99_ns": 89.52,
+      "p999_ns": 149.74,
+      "max_ns": 115518.68
     },
     {
       "name": "numpy float32 (MKL BLAS)",
@@ -45,36 +71,39 @@
       "min_ns": 4000.0,
       "p50_ns": 4200.0,
       "p90_ns": 4500.0,
-      "p99_ns": 11000.0,
-      "p999_ns": 19700.6,
-      "max_ns": 2112700.0
+      "p99_ns": 11100.0,
+      "p999_ns": 18000.1,
+      "max_ns": 647700.0
     },
     {
       "name": "numpy int64",
       "kind": "cpu",
       "iters": 200000,
-      "min_ns": 4500.0,
-      "p50_ns": 4700.0,
-      "p90_ns": 5000.0,
-      "p99_ns": 12500.0,
-      "p999_ns": 28900.0,
-      "max_ns": 712200.0
+      "min_ns": 4600.0,
+      "p50_ns": 4800.0,
+      "p90_ns": 5100.0,
+      "p99_ns": 12700.0,
+      "p999_ns": 20600.1,
+      "max_ns": 1249400.0
     },
     {
       "name": "pure Python loops",
       "kind": "cpu",
       "iters": 20000,
-      "min_ns": 16400.0,
-      "p50_ns": 18000.0,
-      "p90_ns": 19700.0,
-      "p99_ns": 47500.0,
-      "p999_ns": 100506.0,
-      "max_ns": 1367700.0
+      "min_ns": 16500.0,
+      "p50_ns": 17800.0,
+      "p90_ns": 19300.0,
+      "p99_ns": 48100.0,
+      "p999_ns": 70700.6,
+      "max_ns": 249100.0
     }
   ],
-  "fpga_power": {
-    "total_w": 0.096,
-    "dynamic_w": 0.024,
-    "static_w": 0.072
+  "uart_round_trip": {
+    "min_ns": 15075900.0,
+    "p50_ns": 15984750.0,
+    "p90_ns": 16044980.0,
+    "p99_ns": 16153737.0,
+    "p999_ns": 16631375.1,
+    "max_ns": 16690100.0
   }
 }

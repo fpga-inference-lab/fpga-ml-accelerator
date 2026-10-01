@@ -7,7 +7,8 @@ Usage:
 Needs pyserial:  pip install pyserial
 
 Protocol (see rtl/top.sv): send 20 int8 bytes, get back 14 bytes:
-    0xA5, prediction, z2[0] (int32 LE), z2[1] (int32 LE), cycles (uint32 LE)
+    header, prediction, z2[0] (int32 LE), z2[1] (int32 LE), cycles (uint32 LE)
+where the header says which engine the bitstream was built with.
 """
 import struct
 import sys
@@ -20,6 +21,7 @@ from serial.tools import list_ports
 BAUD = 115200
 CLOCK_NS = 10          # Basys 3 runs at 100 MHz
 RESP_LEN = 14
+ENGINES = {0xA5: "systolic", 0xA6: "fast"}
 
 WEIGHTS = Path(__file__).resolve().parent.parent / "model" / "weights"
 
@@ -45,9 +47,9 @@ def infer(ser, x_row):
     if len(resp) != RESP_LEN:
         raise RuntimeError(f"expected {RESP_LEN} bytes, got {len(resp)}: {resp.hex()}")
     header, pred, z_down, z_up, cycles = struct.unpack("<BBiiI", resp)
-    if header != 0xA5:
+    if header not in ENGINES:
         raise RuntimeError(f"bad reply header {header:#04x}: {resp.hex()}")
-    return pred, (z_down, z_up), cycles
+    return pred, (z_down, z_up), cycles, ENGINES[header]
 
 
 def main():
@@ -59,13 +61,15 @@ def main():
     errors = 0
     with serial.Serial(port, BAUD, timeout=1) as ser:
         for m, x_row in enumerate(X):
-            pred, z2, cycles = infer(ser, x_row)
+            pred, z2, cycles, engine = infer(ser, x_row)
+            if m == 0:
+                print(f"engine: {engine}")
             exp_z2 = tuple(int(v) for v in z2_ref[m])
             exp_pred = int(np.argmax(z2_ref[m]))
             ok = z2 == exp_z2 and pred == exp_pred
             errors += not ok
             print(f"example {m}: pred {pred}  z2 = {z2[0]:6d} {z2[1]:6d}  "
-                  f"{cycles} cycles = {cycles * CLOCK_NS / 1000:.2f} us  {'OK' if ok else 'MISMATCH'}")
+                  f"{cycles} cycles = {cycles * CLOCK_NS} ns  {'OK' if ok else 'MISMATCH'}")
             if not ok:
                 print(f"    expected pred {exp_pred}  z2 = {exp_z2}")
 
