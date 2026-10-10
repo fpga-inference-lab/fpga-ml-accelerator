@@ -1,0 +1,18 @@
+{
+  "gpu": "Tesla T4",
+  "compute_capability": "7.5",
+  "sm_count": 40,
+  "cuda_runtime": 13000,
+  "cuda_driver": 13000,
+  "method": "one thread per inference, 256 threads per block, weights in __constant__, pinned host memory, cudaEvent timing, 20 warmup runs; end_to_end = host->device copy + kernel + device->host copy",
+  "correctness": {"test_examples": "PASS", "replicated_batch": 1048576, "random_batch": 1048576, "benchmark_outputs_mismatched": 0},
+  "batch1_latency": {"reps": 10000, "kernel": {"min_us": 7.104, "median_us": 8.224, "p99_us": 12.192, "max_us": 36.864}, "end_to_end": {"min_us": 13.408, "median_us": 28.544, "p99_us": 29.632, "max_us": 44.832}},
+  "sweep": [
+    {"batch": 1, "reps": 500, "kernel": {"min_us": 6.112, "median_us": 7.008, "p99_us": 12.512, "max_us": 18.304}, "end_to_end": {"min_us": 15.392, "median_us": 28.640, "p99_us": 29.088, "max_us": 29.632}, "kernel_inferences_per_s": 142694, "end_to_end_inferences_per_s": 34916.2},
+    {"batch": 16, "reps": 500, "kernel": {"min_us": 6.112, "median_us": 7.008, "p99_us": 12.096, "max_us": 23.936}, "end_to_end": {"min_us": 13.696, "median_us": 28.672, "p99_us": 29.344, "max_us": 36.576}, "kernel_inferences_per_s": 2.28311e+06, "end_to_end_inferences_per_s": 558036},
+    {"batch": 256, "reps": 500, "kernel": {"min_us": 6.944, "median_us": 8.192, "p99_us": 9.632, "max_us": 12.416}, "end_to_end": {"min_us": 17.856, "median_us": 28.608, "p99_us": 29.312, "max_us": 35.712}, "kernel_inferences_per_s": 3.125e+07, "end_to_end_inferences_per_s": 8.94855e+06},
+    {"batch": 4096, "reps": 500, "kernel": {"min_us": 7.040, "median_us": 9.056, "p99_us": 10.592, "max_us": 29.568}, "end_to_end": {"min_us": 28.288, "median_us": 30.688, "p99_us": 39.488, "max_us": 46.880}, "kernel_inferences_per_s": 4.52297e+08, "end_to_end_inferences_per_s": 1.33472e+08},
+    {"batch": 65536, "reps": 500, "kernel": {"min_us": 22.496, "median_us": 22.880, "p99_us": 26.784, "max_us": 45.280}, "end_to_end": {"min_us": 170.560, "median_us": 184.608, "p99_us": 192.768, "max_us": 206.176}, "kernel_inferences_per_s": 2.86434e+09, "end_to_end_inferences_per_s": 3.55001e+08},
+    {"batch": 1048576, "reps": 500, "kernel": {"min_us": 160.096, "median_us": 182.272, "p99_us": 196.608, "max_us": 202.752}, "end_to_end": {"min_us": 2504.000, "median_us": 2515.744, "p99_us": 2552.320, "max_us": 2576.608}, "kernel_inferences_per_s": 5.75281e+09, "end_to_end_inferences_per_s": 4.16806e+08}
+  ]
+}

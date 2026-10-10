@@ -175,8 +175,29 @@ def fpga_power_w(engine):
 
 # ---------------------------------------------------------------- main
 
+def gpu_rows():
+    """Batch-1 GPU latency rows from results/gpu_benchmark.json (written by host/gpu/mlp.cu
+    on another machine), or [] if that file isn't there. Only used for the chart."""
+    path = RESULTS / "gpu_benchmark.json"
+    if not path.exists():
+        return [], None
+    gpu = json.loads(path.read_text(encoding="utf-8"))
+    rows = []
+    for key, label in [("kernel", "kernel only"), ("end_to_end", "with copies")]:
+        s = gpu["batch1_latency"][key]
+        rows.append({"name": f"CUDA GPU (T4), {label}", "kind": "gpu",
+                     "p50_ns": s["median_us"] * 1000, "p99_ns": s["p99_us"] * 1000,
+                     "max_ns": s["max_us"] * 1000})
+    return rows, gpu["gpu"]
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if sys.argv[1:] == ["--replot"]:
+        # redraw results/latency.png from saved results only; nothing is measured
+        plot(json.loads((RESULTS / "benchmark.json").read_text(encoding="utf-8")))
+        print(f"redrew {RESULTS / 'latency.png'} from saved results")
+        return
     port = sys.argv[1] if len(sys.argv) > 1 else None
     results = {"cpu": cpu_name(), "macs_per_inference": MACS, "rows": []}
 
@@ -269,17 +290,20 @@ def plot(results):
     import matplotlib.pyplot as plt
 
     surface, ink, ink2, muted, grid = "#fcfcfb", "#0b0b0b", "#52514e", "#8a8984", "#e4e3df"
-    fpga_color, cpu_color = "#2a78d6", "#52514e"
+    colors = {"fpga": "#2a78d6", "cpu": "#52514e", "gpu": "#eb6834"}
+    cpu_color = colors["cpu"]
 
-    rows = results["rows"][::-1]            # FPGA ends up on top
+    gpu, gpu_name = gpu_rows()
+    rows = (results["rows"] + gpu)[::-1]    # FPGA ends up on top, GPU at the bottom
     fig, ax = plt.subplots(figsize=(9, 0.62 * len(rows) + 1.6), dpi=160)
     fig.patch.set_facecolor(surface)
     ax.set_facecolor(surface)
 
     for y, r in enumerate(rows):
-        color = fpga_color if r["kind"] == "fpga" else cpu_color
-        ax.plot([r["p50_ns"], r["p999_ns"]], [y, y], color=color, lw=2, solid_capstyle="round", zorder=2)
-        ax.plot([r["p999_ns"], r["max_ns"]], [y, y], color=color, lw=1, ls=(0, (2, 2)), zorder=1)
+        color = colors[r["kind"]]
+        tail = r.get("p999_ns", r["p99_ns"])    # the GPU run recorded p99, not p99.9
+        ax.plot([r["p50_ns"], tail], [y, y], color=color, lw=2, solid_capstyle="round", zorder=2)
+        ax.plot([tail, r["max_ns"]], [y, y], color=color, lw=1, ls=(0, (2, 2)), zorder=1)
         varies = r["max_ns"] > r["p50_ns"] * 1.01
         if varies:
             ax.scatter(r["max_ns"], y, s=46, facecolor=surface, edgecolor=color, linewidth=1.6, zorder=3)
@@ -288,8 +312,11 @@ def plot(results):
         ax.annotate(label, (r["p50_ns"], y), xytext=(0, 9), textcoords="offset points",
                     ha="center", fontsize=8, color=ink2)
         if r["max_ns"] > r["p50_ns"] * 1.5:
-            ax.annotate(fmt_ns(r["max_ns"]), (r["max_ns"], y), xytext=(0, 9), textcoords="offset points",
-                        ha="center", fontsize=8, color=ink2)
+            # when the worst case sits close to the median, label it below so the labels don't collide
+            below = r["max_ns"] < r["p50_ns"] * 4
+            ax.annotate(fmt_ns(r["max_ns"]), (r["max_ns"], y), xytext=(0, -9 if below else 9),
+                        textcoords="offset points", ha="center", va="top" if below else "baseline",
+                        fontsize=8, color=ink2)
 
     ax.set_yticks(range(len(rows)))
     ax.set_yticklabels([r["name"] for r in rows], fontsize=9, color=ink)
@@ -309,7 +336,8 @@ def plot(results):
     from matplotlib.lines import Line2D
     handles = [
         Line2D([], [], marker="o", ls="", color=cpu_color, markeredgecolor=surface, markersize=8, label="median"),
-        Line2D([], [], color=cpu_color, lw=2, label="median to 99.9th percentile"),
+        Line2D([], [], color=cpu_color, lw=2,
+               label="median to 99.9th percentile" + (" (GPU: 99th)" if gpu else "")),
         Line2D([], [], marker="o", ls=(0, (2, 2)), color=cpu_color, markerfacecolor=surface, markersize=7,
                label="worst of all runs"),
     ]
@@ -325,8 +353,10 @@ def plot(results):
         title = (f"One inference: compiled C is {best_fpga / best_cpu:.1f}x faster on the median; "
                  "the FPGA never varies")
     fig.text(0.02, 0.965, title, ha="left", va="top", fontsize=11, color=ink, fontweight="bold")
-    fig.text(0.02, 0.915, f"int8 20-16-2 MLP, {MACS} MACs. CPU: {results['cpu']}",
-             ha="left", va="top", fontsize=8.5, color=ink2)
+    subtitle = f"int8 20-16-2 MLP, {MACS} MACs. CPU: {results['cpu']}"
+    if gpu:
+        subtitle += f". GPU: NVIDIA {gpu_name} (Google Colab), batch 1"
+    fig.text(0.02, 0.915, subtitle, ha="left", va="top", fontsize=8.5, color=ink2)
     fig.savefig(RESULTS / "latency.png", facecolor=surface)
     plt.close(fig)
 

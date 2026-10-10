@@ -3,7 +3,8 @@
 A neural network trained in Python, quantized to 8-bit integers, and run on custom
 hardware on a Xilinx Artix-7 FPGA (Digilent Basys 3). The hardware gives the same
 answers as the software model, bit for bit, both in simulation and on the board. It is
-benchmarked against the same network running on a CPU in C, NumPy and plain Python.
+benchmarked against the same network running on a CPU in C, NumPy and plain Python, and
+on an NVIDIA GPU in CUDA.
 
 There are two hardware designs for the same network:
 
@@ -16,10 +17,17 @@ Both meet timing at 100 MHz on the `xc7a35tcpg236-1` and have been measured on t
 
 ## Results
 
-![Latency of one inference, FPGA vs CPU](results/latency.png)
+![Latency of one inference: FPGA, CPU and GPU](results/latency.png)
 
-All CPU numbers were measured on an Intel Core Ultra 9 285H. The FPGA numbers are clock
-cycles counted on the chip itself, times the 10 ns clock period.
+The hardware for each set of numbers:
+
+- **CPU:** an Intel Core Ultra 9 285H laptop.
+- **GPU:** an NVIDIA Tesla T4 on Google Colab.
+- **FPGA:** the Basys 3 board. These numbers are clock cycles counted on the chip itself,
+  times the 10 ns clock period.
+
+In the chart, the GPU rows are batch 1. Their solid line runs to the 99th percentile
+rather than the 99.9th, because that is what the GPU run recorded.
 
 | Implementation | Median | Worst seen | Fast FPGA compared |
 |---|---:|---:|---|
@@ -28,8 +36,13 @@ cycles counted on the chip itself, times the 10 ns clock period.
 | C (`-O3 -march=native`) | 42 ns | 116 µs | C is 1.7× faster on the median |
 | NumPy float32 (Intel MKL) | 4.2 µs | 648 µs | 60-90x faster |
 | Pure Python | 17.8 µs | 249 µs | 254× faster |
+| CUDA GPU (T4), kernel only | 8.22 µs | 36.86 µs | 117× faster |
+| CUDA GPU (T4), with copies | 28.54 µs | 44.83 µs | 407× faster |
 
-Full table with percentiles: [results/benchmark.md](results/benchmark.md).
+CPU and FPGA percentiles are in [results/benchmark.md](results/benchmark.md). GPU details
+are in the section below and in [results/gpu_benchmark.json](results/gpu_benchmark.json).
+For the GPU rows, "Worst seen" is the slowest of 10,000 batch-1 runs, and "with copies"
+includes the host-to-device copy of the input and the device-to-host copy of the result.
 
 What the numbers say:
 
@@ -47,6 +60,47 @@ What the numbers say:
 - **The 70 ns is compute only.** The USB-UART round trip to the laptop is about 16 ms, mostly
   the Windows serial driver's buffering. That is why latency is counted on the chip.
   In a real low-latency system, data would come straight into the FPGA's network pins.
+
+### GPU: CUDA on a Google Colab NVIDIA Tesla T4
+
+`host/gpu/mlp.cu` runs the same integer network on the GPU. Each thread computes one whole
+inference, and the weights are held in `__constant__` memory.
+
+The run reported the GPU as a Tesla T4 (compute capability 7.5, 40 SMs), with CUDA
+runtime and driver 13000 (CUDA 13.0). Times were measured with `cudaEvent`, after warmup
+runs, using pinned host memory. Raw results are in
+[results/gpu_benchmark.json](results/gpu_benchmark.json).
+
+**Batch-1 latency (10,000 runs):**
+
+| | Median | p99 | Min | Max |
+|---|---:|---:|---:|---:|
+| Kernel only | 8.22 µs | 12.19 µs | 7.10 µs | 36.86 µs |
+| With host↔device copies | 28.54 µs | 29.63 µs | 13.41 µs | 44.83 µs |
+
+**Batch sweep (500 runs per size).** Throughput uses the median time.
+
+| Batch | Kernel median | Kernel p99 | End-to-end median | End-to-end p99 | Kernel throughput (inf/s) | End-to-end throughput (inf/s) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 7.01 µs | 12.51 µs | 28.64 µs | 29.09 µs | 1.427e+05 | 3.492e+04 |
+| 16 | 7.01 µs | 12.10 µs | 28.67 µs | 29.34 µs | 2.283e+06 | 5.58e+05 |
+| 256 | 8.19 µs | 9.63 µs | 28.61 µs | 29.31 µs | 3.125e+07 | 8.949e+06 |
+| 4,096 | 9.06 µs | 10.59 µs | 30.69 µs | 39.49 µs | 4.523e+08 | 1.335e+08 |
+| 65,536 | 22.88 µs | 26.78 µs | 184.61 µs | 192.77 µs | 2.864e+09 | 3.55e+08 |
+| 1,048,576 | 182.27 µs | 196.61 µs | 2515.74 µs | 2552.32 µs | 5.753e+09 | 4.168e+08 |
+
+The sweep's batch-1 row comes from its own 500 runs, which is why it differs slightly from
+the 10,000-run latency table above.
+
+At batch 1, the GPU's median kernel time of 8.22 µs for 352 multiply-adds is dominated by
+the cost of launching a kernel, so the FPGA's 70 ns is 117× faster, or 407× once the copies
+to and from the GPU are included. At 1,048,576 inputs the GPU kernel alone reaches
+5.753 × 10⁹ inferences/s, but end to end only 4.168 × 10⁸/s, because the PCIe copies take
+most of the 2,516 µs total and the kernel just 182 µs. The FPGA's fully unrolled pipeline
+could in principle accept a new input every clock cycle (10⁸ inferences/s at 100 MHz), but
+the board design handles one request at a time over UART, so that figure has not been
+measured. The CPU, FPGA (in simulation and on the board) and GPU all produce bit-identical
+outputs, and the GPU also matched the CPU reference on 1,048,576 random inputs.
 
 ## The model
 
@@ -127,6 +181,12 @@ Each step was tested against a bit-exact integer reference before moving on.
 | `sim/top_tb.sv` | full system through the UART pins, for either engine, including the timeout |
 
 3. On the board, `host/run.py` sends the test examples and checks every reply.
+4. On the GPU, `host/gpu/mlp.cu` checks itself before benchmarking. It checks:
+   - the 5 test examples
+   - 1,048,576 repeated copies of them
+   - 1,048,576 random int8 inputs, against a CPU copy of `bench_cpu.c`'s math
+
+   It exits with an error on any mismatch.
 
 ## Repository layout
 
@@ -137,13 +197,15 @@ constraints/  Basys 3 pin assignments
 scripts/      build.tcl: one-command bitstream build
 model/        training, reference generation, frozen int8 weights and hex files
 host/         laptop side: run.py (board test), benchmark.py, bench_cpu.c
-results/      benchmark table, JSON and chart
+host/gpu/     CUDA version: mlp.cu, gen_weights.py (writes weights.h), colab_run.md
+results/      benchmark tables, JSON and chart
 ```
 
 ## Running it
 
 Requirements: Vivado 2025.2 (or similar), Python 3 with `numpy`, `matplotlib` and
-`pyserial`, and gcc for the C baseline. A Basys 3 board is needed for the on-board steps.
+`pyserial`, and gcc for the C baseline. A Basys 3 board is needed for the on-board steps,
+and an NVIDIA GPU with `nvcc` for the GPU benchmark (a free Google Colab T4 works).
 
 **Regenerate the reference files** (optional, they are committed):
 
@@ -184,7 +246,18 @@ python host/benchmark.py COM5    # full benchmark, using the board's live cycle 
 ```
 
 `benchmark.py` without a port runs only the CPU side and uses the last known FPGA cycle
-counts.
+counts. `python host/benchmark.py --replot` redraws `results/latency.png` from the saved
+results without measuring anything. It includes the GPU rows when
+`results/gpu_benchmark.json` is present.
+
+**Run the GPU benchmark.** Run this on a machine with an NVIDIA GPU, from the repo root.
+Step-by-step Colab instructions are in [host/gpu/colab_run.md](host/gpu/colab_run.md).
+
+```
+python3 host/gpu/gen_weights.py                 # optional: regenerate weights.h from model/weights/
+nvcc -O3 -arch=sm_75 -o mlp host/gpu/mlp.cu      # sm_75 = T4; drop -arch for other GPUs
+./mlp                                           # checks correctness, then writes results/gpu_benchmark.json
+```
 
 ## Next steps
 
