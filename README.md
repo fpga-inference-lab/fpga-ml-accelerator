@@ -115,18 +115,24 @@ Each step was tested against a bit-exact integer reference before moving on.
 1. `model/export_reference.py` recomputes the network from the committed weights using
    exactly the hardware's integer math. It checks itself against the layer-1 reference,
    then writes the expected outputs and `$readmemh` hex files.
-2. Self-checking xsim testbenches:
+2. `model/export_unit_vectors.py` builds golden vectors for the unit testbenches. It models
+   the MAC and PE cycle by cycle and the 4×4 array's matrix product in integer math, checks
+   them against NumPy, and writes `$readmemh` hex files (`unit_*.hex`, `arr_*.hex`). It uses
+   a fixed seed, so it reproduces the committed files exactly.
+3. Self-checking xsim testbenches:
 
 | Testbench | What it checks |
 |---|---|
-| `sim/systolic_array_tb.sv` | 4×4 array on a hand-made matrix |
+| `sim/mac_unit_tb.sv` | MAC unit cycle by cycle against golden vectors: zeros, int8 extremes, enable-low hold, reset in the middle, all 80 real layer-1 dot products, seeded random |
+| `sim/pe_tb.sv` | processing element on the same vectors, plus its `a_out`/`b_out` forwarding (follows the inputs when enabled, holds otherwise) |
+| `sim/systolic_array_tb.sv` | 4×4 array on 23 matrix products: zeros, identity, extremes, the hand-made case, real data tiles, seeded random |
 | `sim/dense_tb.sv` | each layer of the systolic engine: all 80 layer-1 and 10 layer-2 values |
 | `sim/mlp_tb.sv` | whole systolic network, run twice to check it restarts cleanly |
 | `sim/fast_mlp_tb.sv` | fully unrolled network on all 5 test examples |
 | `sim/uart_tb.sv` | UART loopback of all 256 byte values at the real baud rate |
 | `sim/top_tb.sv` | full system through the UART pins, for either engine, including the timeout |
 
-3. On the board, `host/run.py` sends the test examples and checks every reply.
+4. On the board, `host/run.py` sends the test examples and checks every reply.
 
 ## Repository layout
 
@@ -149,6 +155,7 @@ Requirements: Vivado 2025.2 (or similar), Python 3 with `numpy`, `matplotlib` an
 
 ```
 python model/export_reference.py
+python model/export_unit_vectors.py
 ```
 
 Do not re-run `model/train.py` unless you mean to retrain. It downloads fresh market
@@ -165,6 +172,9 @@ exec xsim fast -R
 
 Expect `FAST MLP PASS`. The other testbenches work the same way; `top_tb` needs every
 file in `rtl/`.
+
+`mac_unit_tb` compiles with `rtl/mac_unit.sv`, `pe_tb` with `rtl/pe.sv`, and
+`systolic_array_tb` with `rtl/pe.sv rtl/systolic_array.sv`.
 
 **Build a bitstream.** This takes a few minutes. Output goes to `build/<engine>/top.bit`.
 
